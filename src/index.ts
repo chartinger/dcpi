@@ -2,9 +2,9 @@
 
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { execFile, spawn } from "node:child_process";
-import { access, readdir } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify, styleText } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -12,8 +12,18 @@ const execFileAsync = promisify(execFile);
 interface Container {
   id: string;
   name: string;
+  identity: string;
   workspace: string | undefined;
   remoteUser: string | undefined;
+}
+
+interface SavedContainerConfig {
+  workspace: string;
+  extensions: string[];
+}
+
+interface DcpiConfig {
+  containers: Record<string, unknown>;
 }
 
 interface ContainerInspect {
@@ -37,6 +47,55 @@ interface TargetInfo {
 
 function hostPiDirectory(): string {
   return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+}
+
+function configPath(): string {
+  return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "dcpi", "containers.json");
+}
+
+function containerConfigKey(container: Container): string {
+  return `${container.identity}\u0000${container.remoteUser ?? ""}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSavedContainerConfig(value: unknown): value is SavedContainerConfig {
+  return (
+    isRecord(value) &&
+    typeof value.workspace === "string" &&
+    value.workspace.startsWith("/") &&
+    Array.isArray(value.extensions) &&
+    value.extensions.every((extension) => typeof extension === "string")
+  );
+}
+
+async function readConfig(): Promise<DcpiConfig> {
+  try {
+    const raw: unknown = JSON.parse(await readFile(configPath(), "utf8"));
+    if (!isRecord(raw) || !isRecord(raw.containers)) return { containers: {} };
+    return { containers: raw.containers };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { containers: {} };
+    throw new Error(
+      `Could not read dcpi configuration: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function savedConfig(container: Container): Promise<SavedContainerConfig | undefined> {
+  const saved = (await readConfig()).containers[containerConfigKey(container)];
+  return isSavedContainerConfig(saved) ? saved : undefined;
+}
+
+async function saveConfig(container: Container, saved: SavedContainerConfig): Promise<void> {
+  const config = await readConfig();
+  config.containers[containerConfigKey(container)] = saved;
+  const path = configPath();
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await chmod(path, 0o600);
 }
 
 async function withEscape<T>(prompt: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -132,6 +191,7 @@ async function containers(): Promise<Container[]> {
     found.push({
       id: inspect.Id,
       name: inspect.Name.replace(/^\//, ""),
+      identity: labels["devcontainer.local_folder"] ?? inspect.Name.replace(/^\//, ""),
       workspace: info.workspaceFolder ?? labels["devcontainer.local_folder"],
       remoteUser: (info.remoteUser ?? inspect.Config.User) || undefined,
     });
@@ -178,14 +238,14 @@ async function inspectTarget(container: Container): Promise<TargetInfo> {
   return { home, nodeVersion, npmVersion, uid, gid };
 }
 
-async function chooseWorkspace(container: Container): Promise<string> {
+async function chooseWorkspace(container: Container, previous?: string): Promise<string> {
   if (container.workspace?.startsWith("/")) return container.workspace;
   const name = (container.workspace ?? container.name).split(/[\\/]/).filter(Boolean).at(-1);
   return withEscape((signal) =>
     input(
       {
         message: "Container workspace directory (Esc to cancel)",
-        default: `/workspaces/${name ?? container.name}`,
+        default: previous ?? `/workspaces/${name ?? container.name}`,
         validate: (value) =>
           value.startsWith("/") ? true : "Workspace must be an absolute container path.",
       },
@@ -226,21 +286,26 @@ async function installTmux(
   await containerExecStreaming(container, command, "0");
 }
 
-async function installPi(container: Container, target: TargetInfo): Promise<string> {
-  const stateDirectory = `${target.home}/.pi/agent`;
-  const runtimeDirectory = `${stateDirectory}/runtime`;
-  const piBinary = `${runtimeDirectory}/node_modules/.bin/pi`;
-  const installed = await containerExec(
+async function findPi(container: Container, target: TargetInfo): Promise<string | undefined> {
+  const managedPi = `${target.home}/.pi/agent/runtime/node_modules/.bin/pi`;
+  const result = await containerExec(
     container,
-    `if test -x ${shQuote(piBinary)}; then printf yes; else printf no; fi`,
+    `if test -x ${shQuote(managedPi)}; then printf '%s' ${shQuote(managedPi)}; elif command -v pi >/dev/null 2>&1; then command -v pi; fi`,
   );
-  if (installed.trim() !== "yes") {
-    console.log("Installing Pi...");
-    await containerExecStreaming(
-      container,
-      `npm install --ignore-scripts --prefix ${shQuote(runtimeDirectory)} @earendil-works/pi-coding-agent`,
-    );
-  }
+  return result.trim() || undefined;
+}
+
+async function installPi(container: Container, target: TargetInfo): Promise<string> {
+  const existingPi = await findPi(container, target);
+  if (existingPi) return existingPi;
+
+  const runtimeDirectory = `${target.home}/.pi/agent/runtime`;
+  const piBinary = `${runtimeDirectory}/node_modules/.bin/pi`;
+  console.log("Installing Pi...");
+  await containerExecStreaming(
+    container,
+    `npm install --ignore-scripts --prefix ${shQuote(runtimeDirectory)} @earendil-works/pi-coding-agent`,
+  );
   return piBinary;
 }
 
@@ -278,13 +343,14 @@ async function copyIntoContainer(
   selectedExtensions: string[],
   copyAuth: boolean,
 ): Promise<void> {
-  const stateDirectory = `${target.home}/.pi/agent`;
-  const legacyStateDirectory = `${target.home}/.pi-devcontainer`;
+  const piDirectory = `${target.home}/.pi`;
+  const stateDirectory = `${piDirectory}/agent`;
   const extensionsDirectory = `${stateDirectory}/extensions`;
   console.log(`Preparing ${stateDirectory}...`);
   await containerExec(
     container,
-    `if test -x ${shQuote(`${legacyStateDirectory}/tools/node_modules/.bin/pi`)} && ! test -e ${shQuote(`${legacyStateDirectory}/runtime`)}; then mv ${shQuote(`${legacyStateDirectory}/tools`)} ${shQuote(`${legacyStateDirectory}/runtime`)}; fi; if test -d ${shQuote(legacyStateDirectory)} && ! test -e ${shQuote(stateDirectory)}; then mkdir -p ${shQuote(`${target.home}/.pi`)}; mv ${shQuote(legacyStateDirectory)} ${shQuote(stateDirectory)}; fi; umask 077; mkdir -p ${shQuote(extensionsDirectory)}; chmod 700 ${shQuote(stateDirectory)} ${shQuote(extensionsDirectory)}`,
+    `umask 077; mkdir -p ${shQuote(piDirectory)} ${shQuote(extensionsDirectory)}; chown ${target.uid}:${target.gid} ${shQuote(piDirectory)}; chown -R ${target.uid}:${target.gid} ${shQuote(stateDirectory)}; chmod 700 ${shQuote(stateDirectory)} ${shQuote(extensionsDirectory)}`,
+    "0",
   );
 
   for (const extension of selectedExtensions) {
@@ -366,13 +432,17 @@ async function chooseContainer(items: Container[], requested?: string): Promise<
   );
 }
 
-async function chooseExtensions(items: string[]): Promise<string[]> {
+async function chooseExtensions(items: string[], previous?: string[]): Promise<string[]> {
   if (items.length === 0) return [];
   return withEscape((signal) =>
     checkbox(
       {
         message: "Select Pi extensions to copy",
-        choices: items.map((item) => ({ name: item, value: item, checked: item === "vscode-rpc" })),
+        choices: items.map((item) => ({
+          name: item,
+          value: item,
+          checked: previous?.includes(item) ?? false,
+        })),
         theme: { style: { keysHelpTip: selectionKeysHelp } },
       },
       { signal },
@@ -384,6 +454,18 @@ async function chooseAuthCopy(): Promise<boolean> {
   return withEscape((signal) =>
     confirm(
       { message: "Copy host Pi auth.json into the container? (Esc to cancel)", default: false },
+      { signal },
+    ),
+  );
+}
+
+async function useSavedConfig(saved: SavedContainerConfig): Promise<boolean> {
+  return withEscape((signal) =>
+    confirm(
+      {
+        message: `Use saved configuration (${saved.workspace}; ${saved.extensions.length} extensions) and connect? (No to configure)`,
+        default: true,
+      },
       { signal },
     ),
   );
@@ -421,10 +503,19 @@ async function main(): Promise<void> {
     if (items.length === 0) throw new Error("No running Dev Containers found.");
     const container = await chooseContainer(items, targets[0]);
     const target = await inspectTarget(container);
-    const workspace = await chooseWorkspace(container);
-    const selectedExtensions = await chooseExtensions(await extensions());
-    const copyAuth = await chooseAuthCopy();
+    const saved = await savedConfig(container);
+    const useSaved = saved ? await useSavedConfig(saved) : false;
+    const workspace =
+      useSaved && saved ? saved.workspace : await chooseWorkspace(container, saved?.workspace);
+    const existingPi = await findPi(container, target);
     const tmuxPresent = useTmux && (await hasCommand(container, "tmux"));
+
+    if (useSaved && existingPi && (!useTmux || tmuxPresent)) {
+      console.log(`Connecting with saved configuration to existing Pi: ${existingPi}`);
+      await startPi(container, workspace, existingPi, useTmux);
+      return;
+    }
+
     const manager = useTmux && !tmuxPresent ? await packageManager(container) : undefined;
     if (useTmux && !tmuxPresent && !manager) {
       throw new Error(
@@ -432,27 +523,45 @@ async function main(): Promise<void> {
       );
     }
 
-    console.log("\nProvisioning plan:");
-    console.log(`  container: ${container.name} (${container.id.slice(0, 12)})`);
-    console.log(`  workspace: ${workspace}`);
-    console.log(`  remote user: ${container.remoteUser ?? "container default"}`);
-    console.log(`  Node/npm: ${target.nodeVersion} / ${target.npmVersion}`);
-    console.log(`  install Pi: if absent, into ${target.home}/.pi/agent/runtime`);
-    console.log(
-      `  tmux: ${useTmux ? (tmuxPresent ? "already available" : `install (${manager})`) : "disabled"}`,
-    );
-    console.log(`  extensions: ${selectedExtensions.join(", ") || "none"}`);
-    console.log(`  copy auth.json: ${copyAuth ? "yes" : "no"}`);
-    const proceed = await withEscape((signal) =>
-      confirm({ message: "Provision and attach now? (Esc to cancel)", default: false }, { signal }),
-    );
-    if (!proceed) {
-      console.log("Provisioning cancelled.");
-      return;
+    const selectedExtensions =
+      useSaved && saved
+        ? saved.extensions
+        : await chooseExtensions(await extensions(), saved?.extensions);
+    const copyAuth = useSaved ? false : await chooseAuthCopy();
+    if (!useSaved) {
+      console.log("\nProvisioning plan:");
+      console.log(`  container: ${container.name} (${container.id.slice(0, 12)})`);
+      console.log(`  workspace: ${workspace}`);
+      console.log(`  remote user: ${container.remoteUser ?? "container default"}`);
+      console.log(`  Node/npm: ${target.nodeVersion} / ${target.npmVersion}`);
+      console.log(
+        `  Pi: ${existingPi ? `already available (${existingPi})` : `install into ${target.home}/.pi/agent/runtime`}`,
+      );
+      console.log(
+        `  tmux: ${useTmux ? (tmuxPresent ? "already available" : `install (${manager})`) : "disabled"}`,
+      );
+      console.log(`  extensions: ${selectedExtensions.join(", ") || "none"}`);
+      console.log(`  copy auth.json: ${copyAuth ? "yes" : "no"}`);
+      const proceed = await withEscape((signal) =>
+        confirm(
+          { message: "Provision and attach now? (Esc to cancel)", default: false },
+          { signal },
+        ),
+      );
+      if (!proceed) {
+        console.log("Provisioning cancelled.");
+        return;
+      }
+    } else {
+      console.log("Using saved configuration...");
     }
+
     if (useTmux && !tmuxPresent && manager) await installTmux(container, manager);
-    await copyIntoContainer(container, target, selectedExtensions, copyAuth);
-    const piBinary = await installPi(container, target);
+    if (!existingPi || !useSaved) {
+      await copyIntoContainer(container, target, selectedExtensions, copyAuth);
+    }
+    const piBinary = existingPi ?? (await installPi(container, target));
+    if (!useSaved) await saveConfig(container, { workspace, extensions: selectedExtensions });
     console.log(
       `Starting ${useTmux ? "Pi in tmux" : "a new Pi session"} (state: ${target.home}/.pi/agent)...`,
     );

@@ -25,13 +25,21 @@ node dist/index.js list
 - `dcpi list [--json]` lists running Docker containers that carry Dev Container metadata.
 - `dcpi extensions [--json]` lists copyable Pi extensions from
   `$PI_CODING_AGENT_DIR/extensions` (default: `~/.pi/agent/extensions`).
-- `dcpi connect [container-name-or-id] [--tmux]` interactively chooses a running Dev
-  Container and an allowlist of extensions. It then asks whether to copy `auth.json`
-  (default: no), displays the Node/npm-backed provisioning plan, and requires a final
-  confirmation. Provisioning uses standard container-local Pi state at `~/.pi/agent`,
-  copies selected files, installs Pi there when absent, then starts a new Pi session.
-  `--tmux` additionally
-  installs tmux if needed and attaches to a persistent `dcpi-pi` tmux session.
+- `dcpi connect [container-name-or-id] [--tmux]` checks for Pi in the
+  container-local runtime and on the container user's `PATH`, then interactively
+  chooses an allowlist of extensions, asks whether to copy `auth.json` (default: no),
+  displays the Node/npm-backed provisioning plan, and requires a final confirmation.
+  Provisioning uses standard container-local Pi state at `~/.pi/agent`, copies
+  selected files, installs Pi there when absent, then starts a new Pi session.
+  `--tmux` additionally installs tmux if needed and attaches to a persistent
+  `dcpi-pi` tmux session. After a normal provisioning run, dcpi saves the workspace
+  and selected extensions in `~/.config/dcpi/containers.json` (or
+  `$XDG_CONFIG_HOME/dcpi/containers.json`), keyed by the Dev Container's local-folder
+  label and remote user. On later connections it offers to reuse that configuration.
+  If accepted and Pi is already available (and requested tmux is available), dcpi
+  connects immediately using the saved workspace. Otherwise it provisions any missing
+  Pi or tmux requirement using the saved extensions. Credentials are never saved or
+  copied automatically.
 
 `connect` requires an interactive terminal when no container argument is provided.
 
@@ -49,7 +57,9 @@ survive a rebuild. The target must match `remoteUser`'s home directory:
 ```
 
 `${devcontainerId}` expands to a stable per-Dev-Container identifier. The resulting
-Docker volume is named `dcpi-<devcontainer-id>`; it is not Compose-prefixed.
+Docker volume is named `dcpi-<devcontainer-id>`; it is not Compose-prefixed. Docker
+initially mounts a new named volume as `root`; dcpi initializes and assigns the Pi
+state directory to `remoteUser` automatically.
 
 For a Compose-based Dev Container, declare and mount the volume in Compose instead:
 
