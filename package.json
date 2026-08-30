@@ -1,14 +1,33 @@
 {
-  "name": "dcpi",
+  "name": "@chartinger/dcpi",
   "version": "0.1.0",
-  "private": true,
+  "description": "Prepare VS Code Dev Containers for Pi.",
+  "keywords": [
+    "cli",
+    "devcontainer",
+    "docker",
+    "pi",
+    "vscode"
+  ],
+  "homepage": "https://github.com/chartinger/dcpi#readme",
+  "bugs": {
+    "url": "https://github.com/chartinger/dcpi/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chartinger/dcpi.git"
+  },
   "bin": {
-    "dcpi": "./dist/index.js"
+    "dcpi": "dist/index.js"
   },
   "files": [
     "dist"
   ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.build.json",
@@ -16,7 +35,8 @@
     "lint": "oxlint src",
     "format": "oxfmt --write src package.json tsconfig.json tsconfig.build.json README.md",
     "format:check": "oxfmt --check src package.json tsconfig.json tsconfig.build.json README.md",
-    "check": "npm run format:check && npm run lint && npm run check:types"
+    "check": "npm run format:check && npm run lint && npm run check:types",
+    "prepack": "npm run check && npm run build"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.7.0"

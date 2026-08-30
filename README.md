@@ -13,17 +13,34 @@ Only WSL2 has been tested. macOS and native Linux hosts should work when the Doc
 CLI is installed and available to the invoking user, but remain untested. dcpi targets
 Linux Dev Containers; Windows containers are not supported.
 
+## Install
+
 ```bash
+npm install --global @chartinger/dcpi
+
+dcpi list
+dcpi extensions
+dcpi connect
+dcpi connect --tmux
+```
+
+Alternatively, run it without a global installation:
+
+```bash
+npx @chartinger/dcpi connect
+```
+
+## Development
+
+```bash
+git clone https://github.com/chartinger/dcpi.git
+cd dcpi
 npm install
 npm run dev -- list
-npm run dev -- extensions
 npm run dev -- connect
-npm run dev -- connect --tmux
 
-# Build a runnable `dcpi` executable.
 npm run build
 node dist/index.js list
-
 ```
 
 ## Commands
