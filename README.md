@@ -7,6 +7,12 @@ and can create container-local Pi state with selected host extensions and option
 credentials. It starts a new Pi session by default. The optional `--tmux` flag installs
 or reuses tmux and attaches to a persistent Pi tmux session.
 
+## Platform support
+
+Only WSL2 has been tested. macOS and native Linux hosts should work when the Docker
+CLI is installed and available to the invoking user, but remain untested. dcpi targets
+Linux Dev Containers; Windows containers are not supported.
+
 ```bash
 npm install
 npm run dev -- list
