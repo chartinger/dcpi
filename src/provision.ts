@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -153,16 +154,55 @@ export async function findPi(
 
 export async function installPi(container: Container, target: TargetInfo): Promise<string> {
   const existingPi = await findPi(container, target);
-  if (existingPi) return existingPi;
-
+  const hostVersion = hostPiVersion();
+  const spec = hostVersion || "latest";
   const runtimeDirectory = `${target.home}/.pi/agent/runtime`;
   const piBinary = `${runtimeDirectory}/node_modules/.bin/pi`;
+  const installCommand = () =>
+    containerExecStreaming(
+      container,
+      `npm install --ignore-scripts --prefix ${shQuote(runtimeDirectory)} @earendil-works/pi-coding-agent@${shQuote(spec)}`,
+    );
+  if (existingPi) {
+    const remoteVersion = await containerExec(
+      container,
+      `${shQuote(existingPi)} --version 2>/dev/null | sed -n '1p'`,
+    ).then((output) => output.trim());
+    if (hostVersion && compareVersions(remoteVersion, hostVersion) >= 0) return existingPi;
+    if (remoteVersion) console.log(`Updating Pi from ${remoteVersion} to ${spec}...`);
+    else console.log("Installing Pi...");
+    await installCommand();
+    return piBinary;
+  }
   console.log("Installing Pi...");
-  await containerExecStreaming(
-    container,
-    `npm install --ignore-scripts --prefix ${shQuote(runtimeDirectory)} @earendil-works/pi-coding-agent`,
-  );
+  await installCommand();
   return piBinary;
+}
+
+/** Semver-ish comparison; returns -1, 0, or 1. Malformed versions sort lowest. */
+function compareVersions(a: string, b: string): number {
+  const parse = (version: string) => version.split(".").map((part) => parseInt(part, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let index = 0; index < Math.max(pa.length, pb.length); index++) {
+    const diff = (pa[index] ?? 0) - (pb[index] ?? 0);
+    if (diff !== 0) return Math.sign(diff);
+  }
+  return 0;
+}
+
+/** Version of the pi install that hosts dcpi on the host, or "" if unavailable. */
+function hostPiVersion(): string {
+  const manifestPath = resolve(
+    process.execPath.replace(/node(\d+\.\d+)?$/, ""),
+    "lib/node_modules/@earendil-works/pi-coding-agent/package.json",
+  );
+  try {
+    const manifest: { version?: string } = JSON.parse(readFileSync(manifestPath, "utf8"));
+    return manifest.version ?? "";
+  } catch {
+    return "";
+  }
 }
 
 async function runInteractive(container: Container, command: string): Promise<void> {
