@@ -3,6 +3,7 @@ import { styleText } from "node:util";
 
 import type { SavedContainerConfig } from "./config.js";
 import type { Container } from "./docker.js";
+import type { PiExtension } from "./provision.js";
 
 export async function withEscape<T>(prompt: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
@@ -86,16 +87,19 @@ export async function chooseContainer(items: Container[], requested?: string): P
   );
 }
 
-export async function chooseExtensions(items: string[], previous?: string[]): Promise<string[]> {
+export async function chooseExtensions(
+  items: PiExtension[],
+  previous?: string[],
+): Promise<PiExtension[]> {
   if (items.length === 0) return [];
   return withEscape((signal) =>
     checkbox(
       {
         message: "Select Pi extensions to copy",
         choices: items.map((item) => ({
-          name: item,
+          name: item.name,
           value: item,
-          checked: previous?.includes(item) ?? false,
+          checked: previous?.includes(item.name) ?? false,
         })),
         theme: { style: { keysHelpTip: selectionKeysHelp } },
       },

@@ -11,6 +11,7 @@ import {
   installPi,
   installTmux,
   packageManager,
+  resolveSavedExtensions,
   startPi,
 } from "./provision.js";
 import {
@@ -59,10 +60,11 @@ async function connect(arguments_: string[]): Promise<void> {
     );
   }
 
+  const discoveredExtensions = await extensions();
   const selectedExtensions =
     useSaved && saved
-      ? saved.extensions
-      : await chooseExtensions(await extensions(), saved?.extensions);
+      ? resolveSavedExtensions(saved.extensions, discoveredExtensions)
+      : await chooseExtensions(discoveredExtensions, saved?.extensions);
   const copyAuth = useSaved ? false : await chooseAuthCopy();
   if (!useSaved) {
     console.log("\nProvisioning plan:");
@@ -76,7 +78,9 @@ async function connect(arguments_: string[]): Promise<void> {
     console.log(
       `  tmux: ${useTmux ? (tmuxPresent ? "already available" : `install (${manager})`) : "disabled"}`,
     );
-    console.log(`  extensions: ${selectedExtensions.join(", ") || "none"}`);
+    console.log(
+      `  extensions: ${selectedExtensions.map((extension) => extension.name).join(", ") || "none"}`,
+    );
     console.log(`  copy auth.json: ${copyAuth ? "yes" : "no"}`);
     if (!(await confirmProvisioning())) {
       console.log("Provisioning cancelled.");
@@ -91,7 +95,11 @@ async function connect(arguments_: string[]): Promise<void> {
     await copyIntoContainer(container, target, selectedExtensions, copyAuth);
   }
   const piBinary = existingPi ?? (await installPi(container, target));
-  if (!useSaved) await saveConfig(container, { workspace, extensions: selectedExtensions });
+  if (!useSaved)
+    await saveConfig(container, {
+      workspace,
+      extensions: selectedExtensions.map((extension) => extension.name),
+    });
   console.log(
     `Starting ${useTmux ? "Pi in tmux" : "a new Pi session"} (state: ${target.home}/.pi/agent)...`,
   );
@@ -111,7 +119,7 @@ async function main(): Promise<void> {
   if (command === "extensions") {
     const items = await extensions();
     if (arguments_[0] === "--json") console.log(JSON.stringify(items, null, 2));
-    else console.log(items.join("\n"));
+    else console.log(items.map((extension) => extension.name).join("\n"));
     return;
   }
 

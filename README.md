@@ -46,8 +46,12 @@ node dist/index.js list
 ## Commands
 
 - `dcpi list [--json]` lists running Docker containers that carry Dev Container metadata.
-- `dcpi extensions [--json]` lists copyable Pi extensions from
-  `$PI_CODING_AGENT_DIR/extensions` (default: `~/.pi/agent/extensions`).
+- `dcpi extensions [--json]` lists copyable Pi extensions. It discovers loose `.ts`/`.js`
+  files in `$PI_CODING_AGENT_DIR/extensions` (default: `~/.pi/agent/extensions`) and,
+  in addition, resolves Pi packages declared in
+  `$PI_CODING_AGENT_DIR/settings.json` under `packages` (npm specs such as
+  `npm:pi-provider-melious` and local paths such as `../../pi/pi-provider-chax`),
+  listing each package by its `package.json` name.
 - `dcpi connect [container-name-or-id] [--tmux]` checks for Pi in the
   container-local runtime and on the container user's `PATH`, then interactively
   chooses an allowlist of extensions, asks whether to copy `auth.json` (default: no),
