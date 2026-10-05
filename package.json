@@ -1,6 +1,6 @@
 {
   "name": "@chartinger/dcpi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Prepare VS Code Dev Containers for Pi.",
   "keywords": [
     "cli",
