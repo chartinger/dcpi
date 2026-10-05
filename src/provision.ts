@@ -140,14 +140,24 @@ export async function installTmux(container: Container, manager: PackageManager)
   await containerExecStreaming(container, command, "0");
 }
 
+export async function quickWorkspace(container: Container): Promise<string | undefined> {
+  const workspace = await containerExec(
+    container,
+    'if test -f /workspaces/package.json; then printf \'/workspaces\'; exit 0; fi; for manifest in /workspaces/*/package.json; do if test -f "$manifest"; then dirname "$manifest"; exit 0; fi; done',
+  );
+  return workspace.trim() || undefined;
+}
+
 export async function findPi(
   container: Container,
-  target: TargetInfo,
+  target?: TargetInfo,
 ): Promise<string | undefined> {
-  const managedPi = `${target.home}/.pi/agent/runtime/node_modules/.bin/pi`;
+  const managedPi = target
+    ? shQuote(`${target.home}/.pi/agent/runtime/node_modules/.bin/pi`)
+    : '"$HOME/.pi/agent/runtime/node_modules/.bin/pi"';
   const result = await containerExec(
     container,
-    `if test -x ${shQuote(managedPi)}; then printf '%s' ${shQuote(managedPi)}; elif command -v pi >/dev/null 2>&1; then command -v pi; fi`,
+    `if test -x ${managedPi}; then printf '%s' ${managedPi}; elif command -v pi >/dev/null 2>&1; then command -v pi; fi`,
   );
   return result.trim() || undefined;
 }
@@ -218,6 +228,13 @@ async function runInteractive(container: Container, command: string): Promise<vo
       else reject(new Error(`Pi exited with code ${code ?? "unknown"}.`));
     });
   });
+}
+
+export async function startShell(container: Container, workspace: string): Promise<void> {
+  await runInteractive(
+    container,
+    `cd ${shQuote(workspace)}; if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi`,
+  );
 }
 
 export async function startPi(

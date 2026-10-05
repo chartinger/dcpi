@@ -11,8 +11,10 @@ import {
   installPi,
   installTmux,
   packageManager,
+  quickWorkspace,
   resolveSavedExtensions,
   startPi,
+  startShell,
 } from "./provision.js";
 import {
   chooseAuthCopy,
@@ -26,12 +28,65 @@ import {
 } from "./prompts.js";
 
 function usage(): void {
-  console.log(
-    "Usage: dcpi [list [--json] | extensions [--json] | connect [container-name-or-id] [--tmux]]",
-  );
+  console.log(`Usage:
+  dcpi [--setup [--tmux] | --quick-shell]
+  dcpi connect [container-name-or-id] [--setup [--tmux] | --quick-shell]
+  dcpi list [--json]
+  dcpi extensions [--json]
+  dcpi --help
+
+Commands:
+  connect       Connect to a running Dev Container (default command).
+                Start existing Pi, or open a shell if Pi is unavailable.
+                Locate the workspace automatically; no provisioning.
+  list          List running Dev Containers.
+  extensions    List copyable host Pi extensions and packages.
+
+Arguments:
+  container-name-or-id
+                Select a container by exact name or ID prefix.
+                If omitted, prompt for a container (requires a terminal).
+
+Options:
+  --setup       Configure the workspace, extensions, and optional auth copy;
+                install Pi if needed. Offer to reuse saved configuration.
+  --tmux        Install or reuse tmux and attach to a persistent Pi session.
+                Requires --setup.
+  --quick-shell Always open Bash (or sh), even when Pi is available.
+                Cannot be combined with --setup.
+  --json        Output JSON instead of text (list and extensions only).
+  --help, -h    Show this help and exit; also works after a command.
+
+Examples:
+  dcpi
+  dcpi connect my-container
+  dcpi --setup
+  dcpi connect my-container --setup --tmux
+  dcpi --quick-shell
+  dcpi list --json`);
 }
 
-async function connect(arguments_: string[]): Promise<void> {
+async function connect(arguments_: string[], shellOnly = false): Promise<void> {
+  if (arguments_.length > 1) throw new Error("connect accepts at most one container name or ID.");
+
+  const items = await containers();
+  if (items.length === 0) throw new Error("No running Dev Containers found.");
+  const container = await chooseContainer(items, arguments_[0]);
+  const workspace = await quickWorkspace(container);
+  if (!workspace) throw new Error("Working directory cannot be found.");
+
+  const piBinary = shellOnly ? undefined : await findPi(container);
+  if (piBinary) {
+    console.log(`Starting Pi in ${workspace}...`);
+    await startPi(container, workspace, piBinary, false);
+    return;
+  }
+
+  console.log(`Opening a shell in ${workspace}...`);
+  await startShell(container, workspace);
+}
+
+async function setupConnect(arguments_: string[]): Promise<void> {
   const useTmux = arguments_.includes("--tmux");
   const targets = arguments_.filter((argument) => argument !== "--tmux");
   if (targets.length > 1) throw new Error("connect accepts at most one container name or ID.");
@@ -107,7 +162,14 @@ async function connect(arguments_: string[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [command = "connect", ...arguments_] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    usage();
+    return;
+  }
+  const [command = "connect", ...arguments_] = args[0]?.startsWith("--")
+    ? ["connect", ...args]
+    : args;
 
   if (command === "list") {
     const items = await containers();
@@ -124,7 +186,22 @@ async function main(): Promise<void> {
   }
 
   if (command === "connect") {
-    await connect(arguments_);
+    const setup = arguments_.includes("--setup");
+    const shellOnly = arguments_.includes("--quick-shell");
+    if (setup && shellOnly) throw new Error("--setup and --quick-shell cannot be used together.");
+    if (arguments_.includes("--tmux") && !setup) {
+      throw new Error("--tmux requires --setup.");
+    }
+    const unknownFlag = arguments_.find(
+      (argument) =>
+        argument.startsWith("--") && !["--setup", "--quick-shell", "--tmux"].includes(argument),
+    );
+    if (unknownFlag) throw new Error(`Unknown option: ${unknownFlag}`);
+    const targets = arguments_.filter(
+      (argument) => argument !== "--setup" && argument !== "--quick-shell",
+    );
+    if (setup) await setupConnect(targets);
+    else await connect(targets, shellOnly);
     return;
   }
 

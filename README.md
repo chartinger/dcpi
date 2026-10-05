@@ -2,10 +2,11 @@
 
 A host-side CLI for discovering and preparing VS Code Dev Containers for Pi.
 
-This initial bootstrap discovers Dev Containers, checks their Node/npm environment,
-and can create container-local Pi state with selected host extensions and optional
-credentials. It starts a new Pi session by default. The optional `--tmux` flag installs
-or reuses tmux and attaches to a persistent Pi tmux session.
+By default, dcpi discovers Dev Containers and starts Pi when available, or opens a
+shell otherwise. Use `--setup` to check the Node/npm environment and create
+container-local Pi state with selected host extensions and optional credentials.
+With `--setup`, the optional `--tmux` flag installs or reuses tmux and attaches to a
+persistent Pi tmux session.
 
 ## Platform support
 
@@ -20,8 +21,9 @@ npm install --global @chartinger/dcpi
 
 dcpi list
 dcpi extensions
-dcpi connect
-dcpi connect --tmux
+dcpi
+dcpi --setup
+dcpi connect --setup --tmux
 ```
 
 Alternatively, run it without a global installation:
@@ -45,6 +47,10 @@ node dist/index.js list
 
 ## Commands
 
+- `dcpi --help` (also `dcpi -h` or `<command> --help`) explains all commands,
+  arguments, and options without connecting to Docker.
+- `dcpi` (also `dcpi connect [container-name-or-id]`) selects a running Dev Container, locates its workspace by checking `/workspaces/package.json` and then the first `/workspaces` subdirectory containing `package.json`, and starts Pi there when available. If Pi is unavailable, it opens an interactive shell in that directory instead. It does not provision Pi or prompt for configuration.
+- `dcpi --quick-shell` (also `dcpi connect --quick-shell`) performs the same container and workspace selection, but always opens an interactive Bash shell; it falls back to `sh` when Bash is unavailable.
 - `dcpi list [--json]` lists running Docker containers that carry Dev Container metadata.
 - `dcpi extensions [--json]` lists copyable Pi extensions. It discovers loose `.ts`/`.js`
   files in `$PI_CODING_AGENT_DIR/extensions` (default: `~/.pi/agent/extensions`) and,
@@ -52,7 +58,7 @@ node dist/index.js list
   `$PI_CODING_AGENT_DIR/settings.json` under `packages` (npm specs such as
   `npm:pi-provider-melious` and local paths such as `../../pi/pi-provider-chax`),
   listing each package by its `package.json` name.
-- `dcpi connect [container-name-or-id] [--tmux]` checks for Pi in the
+- `dcpi --setup` (also `dcpi connect [container-name-or-id] --setup [--tmux]`) checks for Pi in the
   container-local runtime and on the container user's `PATH`, then interactively
   chooses an allowlist of extensions, asks whether to copy `auth.json` (default: no),
   displays the Node/npm-backed provisioning plan, and requires a final confirmation.
@@ -69,6 +75,7 @@ node dist/index.js list
   copied automatically.
 
 `connect` requires an interactive terminal when no container argument is provided.
+`--tmux` requires `--setup`; `--setup` and `--quick-shell` cannot be combined.
 
 ## Persist Pi state across rebuilds
 
